@@ -1,0 +1,7 @@
+workspace/issues/*
+!workspace/issues/.gitkeep
+.DS_Store
+.vscode/
+.claude/cache/
+.claude/tsc-cache/
+.claude/hooks/node_modules

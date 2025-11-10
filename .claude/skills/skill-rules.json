@@ -1,0 +1,48 @@
+{
+    "version": "1.0",
+    "description": "Skill activation triggers for Claude Code. Controls when skills automatically suggest or block actions.",
+    "skills": {
+        "triager": {
+            "type": "domain",
+            "enforcement": "suggest",
+            "priority": "high",
+            "description": "Skill to help triaging roachtests and CockroachDB test failures",
+            "promptTriggers": {
+                "keywords": [
+                    "triage",
+                    "roachtest",
+                    "test failure",
+                    "flake",
+                    "infrastructure flake",
+                    "analyze issue",
+                    "debug issue",
+                    "investigate failure"
+                ],
+                "intentPatterns": [
+                    "(triage|analyze|debug|investigate).*?(issue|#[0-9]+)",
+                    "(help|analyze).*?(test failure|roachtest)",
+                    "issue.*?#?[0-9]{5,}",
+                    "github\\.com/cockroachdb/cockroach/issues"
+                ]
+            }
+        }
+    },
+    "notes": {
+        "enforcement_types": {
+            "suggest": "Skill suggestion appears but doesn't block execution",
+            "block": "Requires skill to be used before proceeding (guardrail)",
+            "warn": "Shows warning but allows proceeding"
+        },
+        "priority_levels": {
+            "critical": "Highest - Always trigger when matched",
+            "high": "Important - Trigger for most matches",
+            "medium": "Moderate - Trigger for clear matches",
+            "low": "Optional - Trigger only for explicit matches"
+        },
+        "customization": {
+            "pathPatterns": "Adjust to match your project structure (blog-api, auth-service, etc.)",
+            "keywords": "Add domain-specific terms relevant to your project",
+            "intentPatterns": "Use regex for flexible user intent matching"
+        }
+    }
+}
