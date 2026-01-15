@@ -43,14 +43,15 @@ That's it! The download script:
 - ✓ Parses the GitHub issue
 - ✓ Downloads artifacts.zip and debug.zip (if available)
 - ✓ Extracts to workspace/issues/$ISSUE_NUM/
-- ✓ Checks out CRDB source code at the exact SHA from the failure
+- ✓ Creates a git worktree with CRDB source at the exact SHA from the failure
 - ✓ Skips download if already exists
 - ✓ Shows you the workspace path and file locations
 
-**Bonus**: You now have access to:
-- Test source code: `cockroachdb/pkg/cmd/roachtest/tests/`
-- Full CRDB source: `cockroachdb/pkg/` (for grepping error messages)
-Be sure to use these resources when analyzing the issues!
+**Bonus**: Each issue workspace has its own source code checkout:
+- Test source code: `workspace/issues/$ISSUE_NUM/cockroachdb/pkg/cmd/roachtest/tests/`
+- Full CRDB source: `workspace/issues/$ISSUE_NUM/cockroachdb/pkg/` (for grepping error messages)
+
+**Parallel triage**: You can triage multiple issues simultaneously! Each issue gets its own independent source tree at the correct SHA.
 
 ## Skill Organization
 
@@ -72,7 +73,6 @@ Read these files for detailed guidance on each aspect of the triage process.
 - **Be efficient** - Don't download artifacts if not needed
 - **Be conversational** - This is a collaboration with the user
 - **Summarize your findings** - Always write your findings in a `TRIAGE.md` file in the issue's workspace
-- **Clean up after yourself** - Restore the submodule to master when done
 - **Finish by presenting your findings** - Always provide your findings at the end
 
 Your goal is to save the user time by quickly identifying whether this is a real bug that needs investigation or an infrastructure flake that can be closed.

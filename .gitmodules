@@ -1,3 +1,0 @@
-[submodule "cockroachdb"]
-	path = cockroachdb
-	url = https://github.com/cockroachdb/cockroach.git

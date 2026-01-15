@@ -1,5 +1,6 @@
 workspace/issues/*
 !workspace/issues/.gitkeep
+cockroachdb.git/
 .DS_Store
 .vscode/
 .claude/cache/

@@ -18,11 +18,75 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # Source the helper functions
 source "$SCRIPT_DIR/triage-helpers.sh"
 
+# Try to source Snowflake helpers (optional - don't fail if not configured)
+if [[ -f "$SCRIPT_DIR/snowflake-helpers.sh" ]]; then
+    source "$SCRIPT_DIR/snowflake-helpers.sh" 2>/dev/null || true
+fi
+
+# Validation checks before starting triage
+validate_environment() {
+    local errors=0
+
+    log_info "Validating environment..."
+
+    # Check required tools
+    if ! command -v gh &>/dev/null; then
+        log_error "gh (GitHub CLI) not found. Install with: brew install gh"
+        ((errors++))
+    fi
+
+    if ! command -v jq &>/dev/null; then
+        log_error "jq not found. Install with: brew install jq"
+        ((errors++))
+    fi
+
+    if ! command -v curl &>/dev/null; then
+        log_error "curl not found. Please install curl."
+        ((errors++))
+    fi
+
+    if ! command -v unzip &>/dev/null; then
+        log_error "unzip not found. Please install unzip."
+        ((errors++))
+    fi
+
+    # Check required environment variables
+    if [[ -z "${TEAMCITY_TOKEN:-}" ]]; then
+        log_error "TEAMCITY_TOKEN not set. Export with: export TEAMCITY_TOKEN='your_token'"
+        ((errors++))
+    fi
+
+    # Check for bare clone (will be created automatically if missing)
+    if [[ ! -d "$PROJECT_ROOT/cockroachdb.git" ]]; then
+        log_info "CockroachDB bare clone not found - will be created on first use"
+    fi
+
+    # Check GitHub CLI authentication
+    if ! gh auth status &>/dev/null; then
+        log_error "GitHub CLI not authenticated. Run: gh auth login"
+        ((errors++))
+    fi
+
+    if [[ $errors -gt 0 ]]; then
+        log_error "Environment validation failed with $errors error(s)"
+        return 1
+    fi
+
+    log_success "Environment validation passed"
+    return 0
+}
+
 # Main download function
 triage_download() {
     local input="$1"
 
     log_info "Starting triage download for: $input"
+
+    # Validate environment first
+    if ! validate_environment; then
+        log_error "Please fix the above errors and try again"
+        return 1
+    fi
 
     # Parse the GitHub issue (capture only JSON output)
     local metadata_json
@@ -83,11 +147,11 @@ triage_download() {
         echo "  cd workspace/issues/$issue_num"
         echo ""
 
-        # Checkout source code if we have a SHA
+        # Create worktree for source code if we have a SHA
         if [[ -n "$sha" && "$sha" != "null" ]]; then
             echo ""
-            log_info "Checking out source code at SHA: $sha"
-            checkout_source_code "$sha" "cockroachdb" || true
+            log_info "Setting up source code worktree at SHA: $sha"
+            create_source_worktree "$sha" "$issue_num" || true
             echo ""
         fi
 
@@ -138,13 +202,74 @@ triage_download() {
     echo "$metadata_json" > "$workspace_dir/metadata.json"
     log_info "Saved metadata to workspace/issues/$issue_num/metadata.json"
 
-    # Checkout source code if we have a SHA
+    # Create worktree for source code if we have a SHA
     if [[ -n "$sha" && "$sha" != "null" ]]; then
         echo ""
-        log_info "Checking out source code at SHA: $sha"
-        checkout_source_code "$sha" "cockroachdb" || true
+        log_info "Setting up source code worktree at SHA: $sha"
+        create_source_worktree "$sha" "$issue_num" || true
         echo ""
     fi
+
+    # Extract metrics automatically (don't fail if metrics aren't available)
+    echo ""
+    log_info "Extracting metrics from Prometheus..."
+    if extract_metrics "$issue_num"; then
+        log_success "Metrics extraction complete"
+    else
+        log_warn "Metrics extraction failed or not available (this is okay)"
+    fi
+    echo ""
+
+    # Query Snowflake for test history and bisect info (if configured)
+    if command -v snowsql &>/dev/null && [[ -n "${SNOWFLAKE_ACCOUNT:-}" ]]; then
+        echo ""
+        log_info "Querying Snowflake for test history and bisect information..."
+
+        # Extract release from metadata
+        local release
+        release=$(echo "$metadata_json" | jq -r '.release')
+
+        # Find last success and bisect range
+        local bisect_info
+        bisect_info=$(find_bisect_range "$sha" "$test_name" "$release" 2>&1)
+
+        if [[ $? -eq 0 ]]; then
+            # Save bisect info
+            save_bisect_info "$issue_num" "$bisect_info"
+
+            # Show summary
+            local last_success_sha
+            local commit_count
+            last_success_sha=$(echo "$bisect_info" | jq -r '.last_success_sha')
+            commit_count=$(echo "$bisect_info" | jq -r '.commit_count')
+
+            log_success "Found last successful run at SHA: $last_success_sha"
+            log_info "Commits to bisect: $commit_count"
+
+            # Try to find first failure in test history
+            log_info "Searching for first failure in test history..."
+            local first_failure
+            first_failure=$(find_first_failure "$test_name" "$last_success_sha" "$sha" 2>&1)
+
+            if [[ $? -eq 0 && -n "$first_failure" ]]; then
+                log_success "First failure found at: $first_failure"
+                # Update bisect info with first failure
+                bisect_info=$(echo "$bisect_info" | jq --arg ff "$first_failure" '. + {first_failure_sha: $ff}')
+                save_bisect_info "$issue_num" "$bisect_info"
+            else
+                log_info "No test history found for commits in range - manual bisect may be needed"
+            fi
+
+            echo ""
+            log_info "Bisect information saved to workspace/issues/$issue_num/bisect-info.json"
+        else
+            log_warn "Could not determine bisect range: $bisect_info"
+        fi
+    else
+        log_info "Snowflake not configured - skipping test history analysis"
+        log_info "To enable: Install snowsql and set SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PASSWORD"
+    fi
+    echo ""
 
     return 0
 }

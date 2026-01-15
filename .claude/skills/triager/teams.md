@@ -4,7 +4,7 @@ This document helps you determine which CockroachDB team should handle a particu
 
 ## Available Teams
 
-These team names come from `cockroachdb/pkg/cmd/roachtest/registry/owners.go`:
+These team names come from `pkg/cmd/roachtest/registry/owners.go` in the CockroachDB source (available in each issue's worktree at `workspace/issues/$ISSUE_NUM/cockroachdb/`):
 
 ### Data & Streaming Teams
 - **`cdc`** - Change Data Capture and streaming

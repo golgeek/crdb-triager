@@ -55,6 +55,12 @@ export TEAMCITY_TOKEN="your_teamcity_token_here"
 
 # Optional - gh CLI handles this automatically
 export GITHUB_TOKEN="your_github_token"
+
+# Optional - for Snowflake test history and bisect features
+export SNOWFLAKE_ACCOUNT="your_account"
+export SNOWFLAKE_USER="your_username"
+# Use PAT (Personal Access Token) for authentication
+export SNOWFLAKE_PASSWORD="your_personal_access_token"
 ```
 
 ### Usage
@@ -93,6 +99,72 @@ You: Is this a release blocker?
 ```
 
 The assistant responds to your requests and helps you build up context until you're confident in the classification.
+
+## New Features
+
+### 🔍 Automatic Metrics Extraction
+
+The triage download script now automatically extracts key metrics from Prometheus:
+- **Memory usage (RSS)** - Detects OOM conditions
+- **Disk space available** - Detects disk full scenarios
+- **CPU usage** - Identifies CPU starvation
+- **Goroutine count** - Spots goroutine leaks
+- **Node liveness** - Tracks node crashes
+
+Metrics are saved to `workspace/issues/<issue-num>/extracted-metrics.json` with automatic analysis hints.
+
+### 📊 Snowflake Integration (Optional)
+
+When configured, the system automatically queries Snowflake to:
+- Find the last successful run of the failing test
+- Identify the commit range for bisecting
+- Search test history to find the first failing commit
+- Calculate how many commits need to be bisected
+
+Results are saved to `workspace/issues/<issue-num>/bisect-info.json`.
+
+**Setup Snowflake:**
+```bash
+export SNOWFLAKE_ACCOUNT="your_account"
+export SNOWFLAKE_USER="your_username"
+export SNOWFLAKE_PASSWORD="your_pat_token"  # Personal Access Token
+```
+
+Install Snowflake CLI:
+```bash
+# macOS
+brew install snowflake-snowsql
+
+# Or download from: https://docs.snowflake.com/en/user-guide/snowsql-install-config.html
+```
+
+### 🔁 Bisect Helper
+
+New helper script to assist with bisecting failures:
+
+```bash
+# Show bisect information and instructions
+bash .claude/hooks/bisect-helper.sh info <issue-number>
+
+# View the diff between last success and failure
+bash .claude/hooks/bisect-helper.sh diff <issue-number>
+```
+
+The bisect helper will:
+- Show the SHA range to bisect
+- Tell you if the first failure was already found in test history
+- Provide git commands to run manual bisect if needed
+- Show all commits in the range
+
+### ✅ Environment Validation
+
+The download script now validates your environment before starting:
+- Checks for required tools (gh, jq, curl, unzip)
+- Verifies TEAMCITY_TOKEN is set
+- Confirms GitHub CLI authentication
+- Warns if CockroachDB submodule isn't initialized
+
+This prevents failures mid-download and gives clear setup instructions.
 
 ## What Gets Analyzed
 

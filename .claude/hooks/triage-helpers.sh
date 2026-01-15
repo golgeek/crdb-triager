@@ -499,11 +499,163 @@ query_prometheus() {
     return 0
 }
 
-# Check out source code at specific SHA
-# Usage: checkout_source_code "f0bfb1cb00838ff45a508e4f1eba087e9835a674"
+# Create a git worktree for a specific issue at a specific SHA
+# This allows parallel triage of multiple issues, each with their own source tree
+# Usage: create_source_worktree "f0bfb1cb00838ff45a508e4f1eba087e9835a674" "160863"
+create_source_worktree() {
+    local sha="$1"
+    local issue_num="$2"
+
+    if [[ -z "$sha" ]]; then
+        log_error "No SHA provided"
+        return 1
+    fi
+
+    if [[ -z "$issue_num" ]]; then
+        log_error "No issue number provided"
+        return 1
+    fi
+
+    # Get project root
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local project_root="$(cd "$script_dir/../.." && pwd)"
+    local bare_repo="$project_root/cockroachdb.git"
+    local worktree_path="$project_root/workspace/issues/$issue_num/cockroachdb"
+
+    # Check if worktree already exists
+    if [[ -d "$worktree_path/.git" ]] || [[ -f "$worktree_path/.git" ]]; then
+        # Check if it's at the right SHA
+        local current_sha
+        current_sha=$(git -C "$worktree_path" rev-parse HEAD 2>/dev/null || echo "")
+        if [[ "$current_sha" == "$sha"* ]]; then
+            log_success "Worktree already exists at correct SHA"
+            log_info "Source code: workspace/issues/$issue_num/cockroachdb/"
+            return 0
+        else
+            log_info "Worktree exists but at different SHA, updating..."
+            git -C "$worktree_path" checkout "$sha" 2>/dev/null || {
+                # Need to fetch first
+                git -C "$bare_repo" fetch origin "$sha" --depth 1 2>/dev/null || true
+                git -C "$worktree_path" checkout "$sha" 2>/dev/null
+            }
+            if [[ $? -eq 0 ]]; then
+                log_success "Updated worktree to SHA: $sha"
+                return 0
+            fi
+        fi
+    fi
+
+    # Initialize bare clone if it doesn't exist
+    if [[ ! -d "$bare_repo" ]]; then
+        log_info "Initializing CockroachDB bare clone (one-time setup)..."
+        log_info "This may take a few minutes..."
+        if ! git clone --bare --filter=blob:none https://github.com/cockroachdb/cockroach.git "$bare_repo" 2>&1; then
+            log_error "Failed to clone CockroachDB repository"
+            return 1
+        fi
+        log_success "Bare clone created at cockroachdb.git/"
+    fi
+
+    log_info "Creating worktree for issue #$issue_num at SHA: $sha"
+
+    # Fetch the SHA if needed
+    (
+        cd "$bare_repo" || return 1
+
+        # Check if we already have this SHA
+        if git cat-file -e "$sha^{commit}" 2>/dev/null; then
+            log_info "SHA already available locally"
+        else
+            log_info "Fetching SHA from origin..."
+            # Try fetching the specific SHA first (works for recent commits)
+            if ! git fetch origin "$sha" --depth 1 2>/dev/null; then
+                log_info "Fetching from master branch..."
+                git fetch origin master 2>/dev/null || git fetch origin
+            fi
+
+            # Verify we have it now
+            if ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+                log_error "Could not fetch SHA: $sha"
+                return 1
+            fi
+        fi
+    )
+
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+
+    # Create the worktree
+    # Note: git worktree add needs the path relative to bare repo or absolute
+    if git -C "$bare_repo" worktree add "$worktree_path" "$sha" 2>&1; then
+        log_success "Created worktree at: workspace/issues/$issue_num/cockroachdb/"
+        log_info "Test code: workspace/issues/$issue_num/cockroachdb/pkg/cmd/roachtest/tests/"
+        log_info "Full CRDB source: workspace/issues/$issue_num/cockroachdb/pkg/"
+        return 0
+    else
+        log_error "Failed to create worktree"
+        return 1
+    fi
+}
+
+# Remove a git worktree for an issue (cleanup)
+# Usage: remove_source_worktree "160863"
+remove_source_worktree() {
+    local issue_num="$1"
+
+    if [[ -z "$issue_num" ]]; then
+        log_error "No issue number provided"
+        return 1
+    fi
+
+    # Get project root
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local project_root="$(cd "$script_dir/../.." && pwd)"
+    local bare_repo="$project_root/cockroachdb.git"
+    local worktree_path="$project_root/workspace/issues/$issue_num/cockroachdb"
+
+    if [[ ! -d "$worktree_path" ]]; then
+        log_info "No worktree found for issue #$issue_num"
+        return 0
+    fi
+
+    log_info "Removing worktree for issue #$issue_num..."
+
+    if git -C "$bare_repo" worktree remove "$worktree_path" --force 2>&1; then
+        log_success "Removed worktree for issue #$issue_num"
+        return 0
+    else
+        log_warn "Could not remove worktree cleanly, forcing removal..."
+        rm -rf "$worktree_path"
+        git -C "$bare_repo" worktree prune 2>/dev/null || true
+        return 0
+    fi
+}
+
+# List all active worktrees
+# Usage: list_source_worktrees
+list_source_worktrees() {
+    # Get project root
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local project_root="$(cd "$script_dir/../.." && pwd)"
+    local bare_repo="$project_root/cockroachdb.git"
+
+    if [[ ! -d "$bare_repo" ]]; then
+        log_info "No CockroachDB clone found"
+        return 0
+    fi
+
+    log_info "Active worktrees:"
+    git -C "$bare_repo" worktree list
+}
+
+# DEPRECATED: Use create_source_worktree instead
+# Kept for backwards compatibility
 checkout_source_code() {
     local sha="$1"
     local cockroach_dir="${2:-cockroachdb}"
+
+    log_warn "checkout_source_code is deprecated. Use create_source_worktree instead."
 
     if [[ -z "$sha" ]]; then
         log_error "No SHA provided"
@@ -603,6 +755,178 @@ restore_source_code() {
     )
 
     return 0
+}
+
+# Extract and save common metrics for triage analysis
+# Usage: extract_metrics <issue_num>
+# Saves metrics to workspace/issues/$ISSUE_NUM/extracted-metrics.json
+extract_metrics() {
+    local issue_num="$1"
+
+    # Get project root
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local project_root="$(cd "$script_dir/../.." && pwd)"
+    local workspace_dir="$project_root/workspace/issues/$issue_num"
+    local metadata_file="$workspace_dir/metadata.json"
+    local metrics_file="$workspace_dir/extracted-metrics.json"
+
+    if [[ ! -f "$metadata_file" ]]; then
+        log_error "Metadata file not found: $metadata_file"
+        return 1
+    fi
+
+    log_info "Extracting metrics for issue #$issue_num..."
+
+    # Extract metadata
+    local start_ts end_ts grafana_url test_name
+    start_ts=$(jq -r '.start_timestamp' "$metadata_file")
+    end_ts=$(jq -r '.end_timestamp' "$metadata_file")
+    grafana_url=$(jq -r '.grafana_url' "$metadata_file")
+    test_name=$(jq -r '.test_name' "$metadata_file")
+
+    # Check if timestamps are available
+    if [[ -z "$start_ts" || "$start_ts" == "null" || -z "$end_ts" || "$end_ts" == "null" ]]; then
+        log_warn "No timestamps found - metrics not available for this test"
+        # Create empty metrics file
+        echo '{"error": "No timestamps available", "metrics_available": false}' > "$metrics_file"
+        return 0
+    fi
+
+    # Extract test_run_id from Grafana URL
+    local test_run_id
+    if [[ "$grafana_url" =~ teamcity-([0-9]+) ]]; then
+        test_run_id="teamcity-${BASH_REMATCH[1]}"
+    else
+        log_warn "Could not extract test_run_id from Grafana URL"
+        echo '{"error": "No test_run_id found", "metrics_available": false}' > "$metrics_file"
+        return 0
+    fi
+
+    # Sanitize test name for Prometheus labels
+    local sanitized_test_name
+    sanitized_test_name=$(sanitize_test_name "$test_name")
+
+    log_info "Fetching metrics from Prometheus..."
+    log_info "  Test run: $test_run_id"
+    log_info "  Test name: $sanitized_test_name"
+    log_info "  Time range: $(timestamp_to_date "$start_ts") to $(timestamp_to_date "$end_ts")"
+
+    # Try to find cluster name
+    local cluster=""
+    local cluster_query="sys_uptime{job=\"cockroachdb\", test_run_id=\"$test_run_id\", test_name=\"$sanitized_test_name\"}"
+    local cluster_response
+    cluster_response=$(query_prometheus "$start_ts" "$end_ts" "$cluster_query" 2>&1)
+    if [[ $? -eq 0 ]]; then
+        cluster=$(echo "$cluster_response" | jq -r '.data.result[0].metric.cluster' 2>/dev/null)
+        if [[ -z "$cluster" || "$cluster" == "null" ]]; then
+            log_warn "No cluster found in Prometheus - metrics may not be available"
+            echo "{\"error\": \"No cluster found\", \"metrics_available\": false, \"test_run_id\": \"$test_run_id\"}" > "$metrics_file"
+            return 0
+        fi
+        log_info "  Cluster: $cluster"
+    else
+        log_warn "Failed to query Prometheus for cluster name"
+        echo "{\"error\": \"Prometheus query failed\", \"metrics_available\": false}" > "$metrics_file"
+        return 0
+    fi
+
+    # Initialize metrics object
+    local metrics_json='{
+        "metrics_available": true,
+        "test_run_id": "'$test_run_id'",
+        "cluster": "'$cluster'",
+        "start_timestamp": "'$start_ts'",
+        "end_timestamp": "'$end_ts'",
+        "duration_seconds": '$((($end_ts - $start_ts) / 1000))',
+        "metrics": {}
+    }'
+
+    # Query 1: Memory usage (RSS) - for detecting OOM
+    log_info "  Querying memory usage..."
+    local mem_query="sys_rss{job=\"cockroachdb\",test_run_id=\"$test_run_id\",cluster=\"$cluster\"}"
+    local mem_response
+    mem_response=$(query_prometheus "$start_ts" "$end_ts" "$mem_query" 2>&1)
+    if [[ $? -eq 0 ]]; then
+        # Extract max RSS per node
+        metrics_json=$(echo "$metrics_json" | jq --argjson mem "$mem_response" '.metrics.memory_rss = $mem.data.result | map({node: .metric.instance, max_bytes: (.values | map(.[1] | tonumber) | max), values: .values})')
+    fi
+
+    # Query 2: Disk space available - for detecting disk full
+    log_info "  Querying disk space..."
+    local disk_query="node_filesystem_avail_bytes{job=\"node\",test_run_id=\"$test_run_id\",cluster=\"$cluster\",mountpoint=\"/\"}"
+    local disk_response
+    disk_response=$(query_prometheus "$start_ts" "$end_ts" "$disk_query" 2>&1)
+    if [[ $? -eq 0 ]]; then
+        # Extract min available space per node
+        metrics_json=$(echo "$metrics_json" | jq --argjson disk "$disk_response" '.metrics.disk_available = $disk.data.result | map({node: .metric.instance, min_bytes: (.values | map(.[1] | tonumber) | min), values: .values})')
+    fi
+
+    # Query 3: CPU usage - for detecting CPU starvation
+    log_info "  Querying CPU usage..."
+    local cpu_query="sys_cpu_combined_percent_normalized{job=\"cockroachdb\",test_run_id=\"$test_run_id\",cluster=\"$cluster\"}"
+    local cpu_response
+    cpu_response=$(query_prometheus "$start_ts" "$end_ts" "$cpu_query" 2>&1)
+    if [[ $? -eq 0 ]]; then
+        metrics_json=$(echo "$metrics_json" | jq --argjson cpu "$cpu_response" '.metrics.cpu_usage = $cpu.data.result | map({node: .metric.instance, max_percent: (.values | map(.[1] | tonumber) | max), values: .values})')
+    fi
+
+    # Query 4: Goroutine count - for detecting goroutine leaks
+    log_info "  Querying goroutine count..."
+    local goroutine_query="go_goroutines{job=\"cockroachdb\",test_run_id=\"$test_run_id\",cluster=\"$cluster\"}"
+    local goroutine_response
+    goroutine_response=$(query_prometheus "$start_ts" "$end_ts" "$goroutine_query" 2>&1)
+    if [[ $? -eq 0 ]]; then
+        metrics_json=$(echo "$metrics_json" | jq --argjson gor "$goroutine_response" '.metrics.goroutines = $gor.data.result | map({node: .metric.instance, max_count: (.values | map(.[1] | tonumber) | max), values: .values})')
+    fi
+
+    # Query 5: Node liveness - for detecting node crashes
+    log_info "  Querying node liveness..."
+    local liveness_query="liveness_livenodes{job=\"cockroachdb\",test_run_id=\"$test_run_id\",cluster=\"$cluster\"}"
+    local liveness_response
+    liveness_response=$(query_prometheus "$start_ts" "$end_ts" "$liveness_query" 2>&1)
+    if [[ $? -eq 0 ]]; then
+        metrics_json=$(echo "$metrics_json" | jq --argjson live "$liveness_response" '.metrics.liveness = $live.data.result | map({node: .metric.instance, min_live_nodes: (.values | map(.[1] | tonumber) | min), values: .values})')
+    fi
+
+    # Add analysis hints
+    metrics_json=$(echo "$metrics_json" | jq '. + {
+        "analysis_hints": {
+            "oom_detected": (.metrics.memory_rss // [] | map(select(.max_bytes > 30000000000)) | length > 0),
+            "disk_full_detected": (.metrics.disk_available // [] | map(select(.min_bytes < 1000000000)) | length > 0),
+            "high_cpu_detected": (.metrics.cpu_usage // [] | map(select(.max_percent > 95)) | length > 0),
+            "goroutine_leak_detected": (.metrics.goroutines // [] | map(select(.max_count > 50000)) | length > 0)
+        }
+    }')
+
+    # Save to file
+    echo "$metrics_json" | jq '.' > "$metrics_file"
+
+    if [[ $? -eq 0 ]]; then
+        log_success "Metrics extracted to: workspace/issues/$issue_num/extracted-metrics.json"
+
+        # Show analysis hints
+        local oom=$(echo "$metrics_json" | jq -r '.analysis_hints.oom_detected')
+        local disk=$(echo "$metrics_json" | jq -r '.analysis_hints.disk_full_detected')
+        local cpu=$(echo "$metrics_json" | jq -r '.analysis_hints.high_cpu_detected')
+        local goroutines=$(echo "$metrics_json" | jq -r '.analysis_hints.goroutine_leak_detected')
+
+        echo ""
+        log_info "Quick Analysis:"
+        [[ "$oom" == "true" ]] && log_warn "  ⚠ High memory usage detected (possible OOM)"
+        [[ "$disk" == "true" ]] && log_warn "  ⚠ Low disk space detected (possible disk full)"
+        [[ "$cpu" == "true" ]] && log_warn "  ⚠ High CPU usage detected"
+        [[ "$goroutines" == "true" ]] && log_warn "  ⚠ High goroutine count detected (possible leak)"
+
+        if [[ "$oom" == "false" && "$disk" == "false" && "$cpu" == "false" && "$goroutines" == "false" ]]; then
+            log_success "  ✓ No obvious infrastructure issues detected in metrics"
+        fi
+        echo ""
+
+        return 0
+    else
+        log_error "Failed to save metrics"
+        return 1
+    fi
 }
 
 # Write triage summary to TRIAGE.md

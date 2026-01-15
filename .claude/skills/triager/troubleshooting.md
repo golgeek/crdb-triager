@@ -120,37 +120,56 @@ export TEAMCITY_TOKEN="your_teamcity_token"
 No debug.zip available (this is normal)
 ```
 
-## Source Code Checkout Issues
+## Source Code Worktree Issues
 
 ### Issue: "Could not fetch SHA: <sha>"
 **Causes:**
 - SHA doesn't exist in repository
 - Network issues
-- Wrong submodule configuration
+- Bare clone not initialized
 
 **Solutions:**
 ```bash
-# 1. Verify submodule is initialized
-git submodule update --init --recursive
+# 1. Check if bare clone exists
+ls -la cockroachdb.git/
 
-# 2. Check if SHA exists
-cd cockroachdb
-git cat-file -e <sha>^{commit}
+# 2. If not, the download script will create it automatically
+# Or manually initialize:
+git clone --bare --filter=blob:none https://github.com/cockroachdb/cockroach.git cockroachdb.git
 
-# 3. Try fetching manually
-git fetch origin <sha> --depth 1
+# 3. Try fetching the SHA manually
+git -C cockroachdb.git fetch origin <sha> --depth 1
 
-# 4. If all else fails, fetch full history
-git fetch --unshallow
+# 4. If all else fails, fetch more history
+git -C cockroachdb.git fetch origin master
 ```
 
-### Issue: "Not in a git repository" when restoring
-**Cause:** Running restore from wrong directory.
+### Issue: "fatal: <path> is already checked out" when creating worktree
+**Cause:** A worktree already exists at that path.
 
-**Solution:** Run from the triage project root:
+**Solution:**
 ```bash
-cd /path/to/triage
-source .claude/hooks/triage-helpers.sh && restore_source_code
+# Remove the existing worktree first
+source .claude/hooks/triage-helpers.sh && remove_source_worktree 157102
+
+# Or force remove and recreate
+rm -rf workspace/issues/157102/cockroachdb
+git -C cockroachdb.git worktree prune
+```
+
+### Issue: Worktree not created (missing source code)
+**Cause:** Worktree creation failed silently.
+
+**Solution:**
+```bash
+# Check if worktree was created
+ls workspace/issues/$ISSUE_NUM/cockroachdb/
+
+# List all worktrees
+source .claude/hooks/triage-helpers.sh && list_source_worktrees
+
+# Manually create worktree
+git -C cockroachdb.git worktree add workspace/issues/$ISSUE_NUM/cockroachdb <sha>
 ```
 
 ## GitHub CLI Issues
